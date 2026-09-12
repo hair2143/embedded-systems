@@ -191,12 +191,25 @@ btnClearLog.addEventListener("click", () => {
   log("Telemetry cleared.", "system");
 });
 
-// ==============================================================================
-// 3. UI RENDERING & MODE MANAGEMENT
-// ==============================================================================
+function updateModeTabLabels() {
+  [1, 2, 3].forEach(m => {
+    const modeKey = `mode${m}`;
+    const modeData = currentConfig[modeKey];
+    if (modeData && modeData.name) {
+      const tab = document.getElementById(`tabMode${m}`);
+      if (tab) {
+        const titleEl = tab.querySelector(".tab-title");
+        if (titleEl) titleEl.textContent = modeData.name;
+      }
+    }
+  });
+}
 
 function setMode(modeNum, triggeredByHardware = false) {
   currentMode = modeNum;
+
+  // Update tab labels
+  updateModeTabLabels();
 
   // Update tabs
   document.querySelectorAll(".mode-tab").forEach(tab => {
@@ -417,6 +430,9 @@ document.querySelectorAll(".preset-item").forEach(item => {
     const presetKey = item.dataset.preset;
     if (PRESETS[presetKey]) {
       currentConfig[`mode${currentMode}`].buttons = JSON.parse(JSON.stringify(PRESETS[presetKey].buttons));
+      currentConfig[`mode${currentMode}`].name = PRESETS[presetKey].name;
+      updateModeTabLabels();
+      currentModeDisplayTitle.textContent = `Mode ${currentMode}: ${PRESETS[presetKey].name}`;
       renderKeypad();
       log(`Applied preset "${PRESETS[presetKey].name}" to Mode ${currentMode}`, "system");
     }
@@ -565,6 +581,9 @@ function handleIncomingMessage(raw) {
       log("Successfully fetched active configuration from Pico.", "incoming");
       if (data.config) {
         currentConfig = data.config;
+        updateModeTabLabels();
+        const modeData = currentConfig[`mode${currentMode}`] || { name: `Mode ${currentMode}` };
+        currentModeDisplayTitle.textContent = `Mode ${currentMode}: ${modeData.name}`;
         renderKeypad();
       }
     }

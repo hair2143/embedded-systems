@@ -6,8 +6,11 @@ Features:
 - Full USB HID Keyboard & Consumer Media Control
 - USB Serial (CDC) interface for real-time Web Configurator sync
 - 3-Position Rotary Switcher for Layer / Profile selection (Modes 1, 2, 3)
+- Glitch-free rotary switch transition filter (break-before-make safe)
+- Timestamp-based non-blocking button debouncing
 - 6 Status LEDs (2 Green for Mode 1, 2 Blue for Mode 2, 2 Red for Mode 3) with keypress pulsing
-- Dynamic JSON configuration storage (flash or memory)
+- Persistent configuration across reboots using microcontroller.nvm (EEPROM emulation)
+- Strict validation of incoming Web Serial configuration payloads
 - Real-time keypress broadcasting back to the Web Configurator
 """
 
@@ -15,6 +18,7 @@ import time
 import json
 import board
 import digitalio
+import microcontroller
 import usb_hid
 import usb_cdc
 from adafruit_hid.keyboard import Keyboard
@@ -28,11 +32,9 @@ from adafruit_hid.consumer_control_code import ConsumerControlCode
 # ==============================================================================
 
 # Push Buttons (Pico GP2, GP3, GP4, GP5)
-# Connect one side to GPIO, other side to GND
 BUTTON_PINS = [board.GP2, board.GP3, board.GP4, board.GP5]
 
 # 3-Position Rotary Selector Pins (GP6, GP7, GP8)
-# Connect common pin to GND, selector positions to GPIO
 MODE_PINS = [board.GP6, board.GP7, board.GP8]
 
 # Status LEDs (GPIO to 220/330 ohm resistor to Anode +, Cathode - to GND)
@@ -49,10 +51,9 @@ LED_RED_1 = board.GP18
 LED_RED_2 = board.GP19
 
 # ==============================================================================
-# 2. DEFAULT PROFILES & KEYCODE MAPPINGS
+# 2. KEYCODE LOOKUP MAPS & DEFAULTS
 # ==============================================================================
 
-# Map friendly string names to Keycode values
 KEY_MAP = {
     "A": Keycode.A, "B": Keycode.B, "C": Keycode.C, "D": Keycode.D,
     "E": Keycode.E, "F": Keycode.F, "G": Keycode.G, "H": Keycode.H,
@@ -84,7 +85,6 @@ KEY_MAP = {
     "GUI": Keycode.GUI, "CMD": Keycode.GUI, "WIN": Keycode.GUI
 }
 
-# Consumer media controls
 MEDIA_MAP = {
     "MUTE": ConsumerControlCode.MUTE,
     "VOLUME_UP": ConsumerControlCode.VOLUME_INCREMENT,
@@ -95,7 +95,6 @@ MEDIA_MAP = {
     "PREV_TRACK": ConsumerControlCode.SCAN_PREVIOUS_TRACK,
 }
 
-# Default 3 Modes / Profiles
 DEFAULT_CONFIG = {
     "mode1": {
         "name": "Dev & Code",
@@ -126,10 +125,129 @@ DEFAULT_CONFIG = {
     }
 }
 
-config = DEFAULT_CONFIG
+# ==============================================================================
+# 3. PERSISTENT STORAGE (NVM EEPROM + FLASH FILE FALLBACK)
+# ==============================================================================
+
+NVM_MAGIC = b"PAD1"  # 4-byte header identifier
+
+def load_persistent_config():
+    """Attempts to load saved configuration from Non-Volatile Memory (NVM) or filesystem."""
+    # 1. Try reading from microcontroller.nvm (works even when USB drive is mounted read-only)
+    try:
+        if len(microcontroller.nvm) >= 8:
+            header = bytes(microcontroller.nvm[0:4])
+            if header == NVM_MAGIC:
+                length = (microcontroller.nvm[4] << 8) | microcontroller.nvm[5]
+                if 0 < length <= (len(microcontroller.nvm) - 6):
+                    json_bytes = bytes(microcontroller.nvm[6:6 + length])
+                    data = json.loads(json_bytes.decode("utf-8"))
+                    if validate_config(data):
+                        print("Loaded configuration from microcontroller.nvm")
+                        return data
+    except Exception as e:
+        print("NVM load error:", e)
+
+    # 2. Try reading from /config.json on flash
+    try:
+        with open("/config.json", "r") as f:
+            data = json.load(f)
+            if validate_config(data):
+                print("Loaded configuration from /config.json")
+                return data
+    except Exception:
+        pass
+
+    print("Using factory default configuration")
+    return DEFAULT_CONFIG
+
+def save_persistent_config(cfg):
+    """Saves valid configuration to microcontroller.nvm and tries /config.json."""
+    encoded = json.dumps(cfg).encode("utf-8")
+    length = len(encoded)
+
+    # 1. Save to NVM
+    saved_to_nvm = False
+    try:
+        if length + 6 <= len(microcontroller.nvm):
+            microcontroller.nvm[0:4] = NVM_MAGIC
+            microcontroller.nvm[4] = (length >> 8) & 0xFF
+            microcontroller.nvm[5] = length & 0xFF
+            microcontroller.nvm[6:6 + length] = encoded
+            saved_to_nvm = True
+            print("Saved config to microcontroller.nvm successfully")
+    except Exception as e:
+        print("Failed to save to NVM:", e)
+
+    # 2. Try saving to /config.json (if filesystem is writable)
+    saved_to_file = False
+    try:
+        with open("/config.json", "w") as f:
+            f.write(json.dumps(cfg))
+            saved_to_file = True
+    except OSError:
+        # Normal in CircuitPython when USB host has write access to flash
+        pass
+
+    return saved_to_nvm or saved_to_file
 
 # ==============================================================================
-# 3. INITIALIZE HARDWARE
+# 4. CONFIGURATION VALIDATION
+# ==============================================================================
+
+def validate_config(cfg):
+    """Strictly validates configuration structure and types before applying."""
+    if not isinstance(cfg, dict):
+        return False
+
+    required_modes = ["mode1", "mode2", "mode3"]
+    for m in required_modes:
+        if m not in cfg:
+            return False
+        mode_data = cfg[m]
+        if not isinstance(mode_data, dict):
+            return False
+        buttons = mode_data.get("buttons")
+        if not isinstance(buttons, list) or len(buttons) == 0 or len(buttons) > 12:
+            return False
+
+        for btn in buttons:
+            if not isinstance(btn, dict):
+                return False
+            act_type = btn.get("type")
+            if act_type not in ["combo", "single", "media", "string"]:
+                return False
+
+            if act_type == "combo":
+                k = btn.get("key", "")
+                if not isinstance(k, str) or k.upper() not in KEY_MAP:
+                    return False
+                mods = btn.get("modifiers", [])
+                if not isinstance(mods, list):
+                    return False
+                for mod in mods:
+                    if not isinstance(mod, str) or mod.upper() not in KEY_MAP:
+                        return False
+
+            elif act_type == "single":
+                k = btn.get("key", "")
+                if not isinstance(k, str) or k.upper() not in KEY_MAP:
+                    return False
+
+            elif act_type == "media":
+                act = btn.get("action", "")
+                if not isinstance(act, str) or act.upper() not in MEDIA_MAP:
+                    return False
+
+            elif act_type == "string":
+                text = btn.get("text", "")
+                if not isinstance(text, str) or len(text) > 256:
+                    return False
+
+    return True
+
+# ==============================================================================
+# 5. INITIALIZE HARDWARE
 # ==============================================================================
 
 # Setup Push Buttons with Internal Pull-Ups
@@ -148,7 +266,7 @@ for pin in MODE_PINS:
     m_pin.pull = digitalio.Pull.UP
     mode_inputs.append(m_pin)
 
-# Setup LEDs
+# Setup Status LEDs
 led_g1 = digitalio.DigitalInOut(LED_GREEN_1); led_g1.direction = digitalio.Direction.OUTPUT
 led_g2 = digitalio.DigitalInOut(LED_GREEN_2); led_g2.direction = digitalio.Direction.OUTPUT
 led_b1 = digitalio.DigitalInOut(LED_BLUE_1); led_b1.direction = digitalio.Direction.OUTPUT
@@ -171,11 +289,11 @@ except Exception as e:
     layout = None
     consumer_control = None
 
-# Serial interface for Web Configurator
 serial = usb_cdc.console
+config = load_persistent_config()
 
 # ==============================================================================
-# 4. HELPER FUNCTIONS
+# 6. HELPER FUNCTIONS & DEBOUNCING
 # ==============================================================================
 
 def set_leds_for_mode(mode_num):
@@ -191,29 +309,28 @@ def set_leds_for_mode(mode_num):
         for led in red_leds: led.value = True
 
 def pulse_active_leds(mode_num):
-    """Briefly blinks active LEDs to provide tactile visual feedback on keypress."""
+    """Tactile feedback blink on keypress."""
     active_group = green_leds if mode_num == 1 else (blue_leds if mode_num == 2 else red_leds)
     for led in active_group:
         led.value = False
-    time.sleep(0.04)
+    # Non-blocking or short micro pulse
+    time.sleep(0.03)
     for led in active_group:
         led.value = True
 
-def get_current_mode():
-    """Reads 3-position selector switch (pin pulled LOW = active position)."""
+def read_raw_rotary_switch():
+    """Returns detected mode index (1, 2, 3) or None if between switch contacts."""
     for idx, pin in enumerate(mode_inputs):
-        if not pin.value:  # Low = active switch position
+        if not pin.value:  # Active LOW
             return idx + 1
-    # Fallback to Mode 1 if switch is in transit or disconnected
-    return 1
+    return None  # In-flight transition: do NOT jump to Mode 1!
 
 def execute_action(action_def):
-    """Executes the programmed action (key combo, media key, or string typing)."""
+    """Executes the programmed key action without blocking serial."""
     if not action_def or keyboard is None:
         return
 
     act_type = action_def.get("type", "single")
-
     try:
         if act_type == "single":
             k_str = action_def.get("key", "").upper()
@@ -225,8 +342,9 @@ def execute_action(action_def):
             k_str = action_def.get("key", "").upper()
             keys_to_press = []
             for mod in modifiers:
-                if mod.upper() in KEY_MAP:
-                    keys_to_press.append(KEY_MAP[mod.upper()])
+                m_upper = mod.upper()
+                if m_upper in KEY_MAP:
+                    keys_to_press.append(KEY_MAP[m_upper])
             if k_str in KEY_MAP:
                 keys_to_press.append(KEY_MAP[k_str])
 
@@ -256,7 +374,7 @@ def send_serial_msg(data):
             pass
 
 def check_serial_commands():
-    """Checks for incoming configuration commands from the Web Configurator."""
+    """Checks for incoming commands from the Web Configurator."""
     global config
     if not serial or not serial.in_waiting:
         return
@@ -270,7 +388,6 @@ def check_serial_commands():
         action = cmd.get("action")
 
         if action == "PING":
-            # Handshake with Web Configurator
             send_serial_msg({
                 "response": "PONG",
                 "device": "Raspberry Pi Pico MacroPad",
@@ -279,7 +396,6 @@ def check_serial_commands():
             })
 
         elif action == "GET_CONFIG":
-            # Web app requests current configuration
             send_serial_msg({
                 "response": "CONFIG",
                 "config": config,
@@ -287,71 +403,97 @@ def check_serial_commands():
             })
 
         elif action == "SET_CONFIG":
-            # Web app sends new configuration
             new_cfg = cmd.get("config")
-            if new_cfg:
+            if validate_config(new_cfg):
                 config = new_cfg
-                send_serial_msg({"response": "CONFIG_SAVED", "status": "ok"})
-                # Flash all LEDs to confirm save
+                saved = save_persistent_config(config)
+                send_serial_msg({
+                    "response": "CONFIG_SAVED",
+                    "status": "ok",
+                    "persistent": saved
+                })
+                # Visual confirmation flash
                 for _ in range(3):
                     for led in green_leds + blue_leds + red_leds: led.value = True
-                    time.sleep(0.08)
+                    time.sleep(0.06)
                     for led in green_leds + blue_leds + red_leds: led.value = False
-                    time.sleep(0.08)
+                    time.sleep(0.06)
                 set_leds_for_mode(current_mode)
+            else:
+                send_serial_msg({
+                    "response": "ERROR",
+                    "message": "Invalid configuration structure or unsupported keycode"
+                })
 
     except Exception as err:
         send_serial_msg({"response": "ERROR", "message": str(err)})
 
 # ==============================================================================
-# 5. MAIN LOOP
+# 7. MAIN LOOP (NON-BLOCKING WITH TIMESTAMP DEBOUNCING)
 # ==============================================================================
 
-# Button state tracking (for debouncing)
-last_button_states = [True] * len(buttons)  # True = unpressed (Pull-up)
-current_mode = get_current_mode()
+DEBOUNCE_TIME_MS = 0.040  # 40 milliseconds button debounce
+ROTARY_STABLE_SAMPLES = 3  # Must read same position 3 consecutive times to avoid transition flicker
+
+current_mode = read_raw_rotary_switch() or 1
+candidate_mode = current_mode
+rotary_sample_count = 0
 set_leds_for_mode(current_mode)
+
+# State tracking
+last_button_phys_state = [True] * len(buttons)  # True = unpressed (Pull-up)
+last_button_press_time = [0.0] * len(buttons)
 
 print("Macro Keyboard Ready. Active Mode:", current_mode)
 
 while True:
-    # 1. Check for commands from the Web Configurator
+    now = time.monotonic()
+
+    # 1. Process Web Serial commands
     check_serial_commands()
 
-    # 2. Check 3-position rotary mode switch
-    new_mode = get_current_mode()
-    if new_mode != current_mode:
-        current_mode = new_mode
-        set_leds_for_mode(current_mode)
-        send_serial_msg({"event": "MODE_CHANGED", "mode": current_mode})
-        time.sleep(0.05)
+    # 2. Rotary Switch with glitch-free sample filtering
+    detected_mode = read_raw_rotary_switch()
+    if detected_mode is not None:
+        if detected_mode == candidate_mode:
+            rotary_sample_count += 1
+            if rotary_sample_count >= ROTARY_STABLE_SAMPLES and current_mode != candidate_mode:
+                current_mode = candidate_mode
+                set_leds_for_mode(current_mode)
+                send_serial_msg({"event": "MODE_CHANGED", "mode": current_mode})
+        else:
+            candidate_mode = detected_mode
+            rotary_sample_count = 1
+    else:
+        # In-flight between rotary contacts: reset counter and hold previous mode
+        rotary_sample_count = 0
 
-    # 3. Read and debounce Push Buttons
+    # 3. Read Push Buttons with timestamp debouncing
     for i, btn in enumerate(buttons):
-        curr_state = btn.value  # False = Pressed (to GND), True = Released
+        curr_state = btn.value  # False = Pressed (pulled to GND), True = Released
 
-        if not curr_state and last_button_states[i]:
-            # Button just pressed!
-            pulse_active_leds(current_mode)
+        if curr_state != last_button_phys_state[i]:
+            if (now - last_button_press_time[i]) >= DEBOUNCE_TIME_MS:
+                last_button_press_time[i] = now
+                last_button_phys_state[i] = curr_state
 
-            # Notify Web Configurator in real-time
-            send_serial_msg({
-                "event": "BUTTON_PRESSED",
-                "button_id": i,
-                "mode": current_mode
-            })
+                if not curr_state:
+                    # Fresh keypress detected!
+                    pulse_active_leds(current_mode)
 
-            # Fetch action for current mode and button index
-            mode_key = f"mode{current_mode}"
-            mode_data = config.get(mode_key, {})
-            mode_buttons = mode_data.get("buttons", [])
+                    # Notify Web Configurator in real time
+                    send_serial_msg({
+                        "event": "BUTTON_PRESSED",
+                        "button_id": i,
+                        "mode": current_mode
+                    })
 
-            if i < len(mode_buttons):
-                execute_action(mode_buttons[i])
+                    # Execute configured action for current mode & button
+                    mode_key = f"mode{current_mode}"
+                    mode_data = config.get(mode_key, {})
+                    mode_buttons = mode_data.get("buttons", [])
 
-            # Small debounce delay
-            time.sleep(0.02)
+                    if i < len(mode_buttons):
+                        execute_action(mode_buttons[i])
 
-        last_button_states[i] = curr_state
-
-    time.sleep(0.01)
+    time.sleep(0.005)
