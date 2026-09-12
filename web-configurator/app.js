@@ -91,6 +91,8 @@ let currentConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 let serialPort = null;
 let serialReader = null;
 let serialWriter = null;
+let readableStreamClosed = null;
+let writableStreamClosed = null;
 let keepReading = false;
 let editingButtonIndex = null;
 let selectedMediaType = "MUTE";
@@ -99,6 +101,8 @@ let selectedMediaType = "MUTE";
 const btnConnect = document.getElementById("btnConnect");
 const btnConnectText = document.getElementById("btnConnectText");
 const connectionStatus = document.getElementById("connectionStatus");
+const liveActivity = document.getElementById("liveActivity");
+const liveActivityText = document.getElementById("liveActivityText");
 const btnSaveToPico = document.getElementById("btnSaveToPico");
 const btnLoadFromPico = document.getElementById("btnLoadFromPico");
 const logStream = document.getElementById("logStream");
@@ -243,9 +247,11 @@ function renderKeypad() {
     const slot = document.createElement("div");
     slot.className = "keycap-slot";
 
-    const keycap = document.createElement("div");
+    const keycap = document.createElement("button");
+    keycap.type = "button";
     keycap.className = "keycap";
     keycap.id = `keycap-${index}`;
+    keycap.setAttribute("aria-label", `Key ${index + 1}: ${btn.label || "Unassigned"}`);
 
     // Header with index and physical GPIO pin
     const header = document.createElement("div");
@@ -342,12 +348,20 @@ function openEditModal(index) {
   }
 
   editModal.classList.remove("hidden");
+  setTimeout(() => keyLabelInput.focus(), 60);
 }
 
 function closeEditModal() {
   editModal.classList.add("hidden");
   editingButtonIndex = null;
 }
+
+// Close modal on Escape key
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !editModal.classList.contains("hidden")) {
+    closeEditModal();
+  }
+});
 
 function selectActionType(type) {
   actionTypeBtns.forEach(btn => {
@@ -443,6 +457,16 @@ document.querySelectorAll(".preset-item").forEach(item => {
 // 6. WEB SERIAL API INTEGRATION
 // ==============================================================================
 
+// Listen for physical USB disconnect
+if ("serial" in navigator) {
+  navigator.serial.addEventListener("disconnect", (event) => {
+    if (serialPort && event.target === serialPort) {
+      log("USB device physically unplugged.", "error");
+      cleanupConnection();
+    }
+  });
+}
+
 async function connectSerial() {
   if (!("serial" in navigator)) {
     alert("Web Serial API is not supported in this browser. Please use Google Chrome, Microsoft Edge, Brave, or Opera.");
@@ -455,46 +479,77 @@ async function connectSerial() {
     await serialPort.open({ baudRate: 115200 });
 
     keepReading = true;
+
+    // Pipe writer stream and keep promise for closing
+    const textEncoder = new TextEncoderStream();
+    writableStreamClosed = textEncoder.readable.pipeTo(serialPort.writable);
+    serialWriter = textEncoder.writable.getWriter();
+
     updateConnectionUI(true);
     log("Connected to Pico MacroPad over USB CDC Serial (115200 baud).", "incoming");
 
-    // Setup writer
-    const textEncoder = new TextEncoderStream();
-    textEncoder.readable.pipeTo(serialPort.writable);
-    serialWriter = textEncoder.writable.getWriter();
+    // Start read loop
+    readSerialLoop();
 
     // Send PING handshake
     await sendSerialCommand({ action: "PING" });
-
-    // Read loop
-    readSerialLoop();
   } catch (err) {
     console.error(err);
     log(`Connection failed: ${err.message}`, "error");
-    updateConnectionUI(false);
+    await cleanupConnection();
   }
 }
 
 async function disconnectSerial() {
-  keepReading = false;
-  try {
-    if (serialReader) {
-      await serialReader.cancel();
-      serialReader = null;
-    }
-    if (serialWriter) {
-      await serialWriter.close();
-      serialWriter = null;
-    }
-    if (serialPort) {
-      await serialPort.close();
-      serialPort = null;
-    }
-  } catch (e) {
-    console.error(e);
-  }
-  updateConnectionUI(false);
+  log("Disconnecting from USB device...", "system");
+  await cleanupConnection();
   log("Disconnected from USB device.", "system");
+}
+
+async function cleanupConnection() {
+  keepReading = false;
+
+  // 1. Cancel and release reader stream
+  if (serialReader) {
+    try {
+      await serialReader.cancel();
+    } catch (e) {
+      // Ignore abort errors
+    }
+    serialReader = null;
+  }
+  if (readableStreamClosed) {
+    try {
+      await readableStreamClosed.catch(() => {});
+    } catch (e) {}
+    readableStreamClosed = null;
+  }
+
+  // 2. Close writer stream
+  if (serialWriter) {
+    try {
+      await serialWriter.close();
+    } catch (e) {}
+    serialWriter = null;
+  }
+  if (writableStreamClosed) {
+    try {
+      await writableStreamClosed.catch(() => {});
+    } catch (e) {}
+    writableStreamClosed = null;
+  }
+
+  // 3. Safely close physical serial port
+  if (serialPort) {
+    try {
+      await serialPort.close();
+    } catch (e) {
+      console.warn("Serial port close error:", e);
+    }
+    serialPort = null;
+  }
+
+  updateConnectionUI(false);
 }
 
 function updateConnectionUI(connected) {
@@ -505,6 +560,14 @@ function updateConnectionUI(connected) {
     btnConnect.classList.replace("btn-primary", "btn-secondary");
     btnSaveToPico.disabled = false;
     btnLoadFromPico.disabled = false;
+
+    if (liveActivity) {
+      liveActivity.classList.remove("offline");
+      liveActivity.classList.add("online");
+    }
+    if (liveActivityText) {
+      liveActivityText.textContent = "Live Hardware Listener Active";
+    }
   } else {
     connectionStatus.classList.remove("connected");
     connectionStatus.querySelector(".status-text").textContent = "Disconnected";
@@ -512,6 +575,14 @@ function updateConnectionUI(connected) {
     btnConnect.classList.replace("btn-secondary", "btn-primary");
     btnSaveToPico.disabled = true;
     btnLoadFromPico.disabled = true;
+
+    if (liveActivity) {
+      liveActivity.classList.remove("online");
+      liveActivity.classList.add("offline");
+    }
+    if (liveActivityText) {
+      liveActivityText.textContent = "Hardware Offline";
+    }
   }
 }
 
@@ -527,31 +598,45 @@ async function sendSerialCommand(cmdObj) {
 }
 
 async function readSerialLoop() {
-  while (serialPort && serialPort.readable && keepReading) {
-    const textDecoder = new TextDecoderStream();
-    const readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
-    serialReader = textDecoder.readable.getReader();
+  try {
+    while (serialPort && serialPort.readable && keepReading) {
+      const textDecoder = new TextDecoderStream();
+      readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
+      serialReader = textDecoder.readable.getReader();
 
-    let buffer = "";
-    try {
-      while (true) {
-        const { value, done } = await serialReader.read();
-        if (done) break;
-        if (value) {
-          buffer += value;
-          const lines = buffer.split("\n");
-          buffer = lines.pop(); // Keep incomplete line in buffer
+      let buffer = "";
+      try {
+        while (true) {
+          const { value, done } = await serialReader.read();
+          if (done) break;
+          if (value) {
+            buffer += value;
+            const lines = buffer.split("\n");
+            buffer = lines.pop(); // Retain incomplete line
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed) handleIncomingMessage(trimmed);
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed) handleIncomingMessage(trimmed);
+            }
           }
         }
+      } catch (err) {
+        console.warn("Serial read loop error:", err);
+        break;
+      } finally {
+        if (serialReader) {
+          try {
+            serialReader.releaseLock();
+          } catch (e) {}
+        }
       }
-    } catch (err) {
-      console.warn("Serial read loop closed:", err);
-    } finally {
-      serialReader.releaseLock();
+    }
+  } catch (err) {
+    console.warn("Outer stream error:", err);
+  } finally {
+    if (keepReading) {
+      log("Connection lost or device unplugged.", "error");
+      cleanupConnection();
     }
   }
 }
@@ -563,6 +648,10 @@ function handleIncomingMessage(raw) {
     // Physical key pressed on breadboard!
     if (data.event === "BUTTON_PRESSED") {
       log(`[EVENT] Button ${data.button_id + 1} pressed (Mode ${data.mode})`, "incoming");
+      // Synchronize UI layer if device mode differs from displayed mode
+      if (data.mode && data.mode !== currentMode) {
+        setMode(data.mode, false);
+      }
       flashKeypressOnScreen(data.button_id);
     }
     // Physical 3-position rotary switch changed!

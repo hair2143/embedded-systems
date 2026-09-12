@@ -6,8 +6,7 @@
   <title>Pico MacroPad Configurator</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&amp;family=Outfit:wght@400;500;600;700&amp;display=swap" rel="stylesheet" />
 </head>
 <body class="theme-mode-1">
   <div class="app-container">
@@ -125,9 +124,9 @@
             <h2 id="currentModeDisplayTitle">Mode 1: Dev & Code</h2>
             <p>Click any button below to customize its action</p>
           </div>
-          <div class="live-activity-badge" id="liveActivity">
+          <div class="live-activity-badge offline" id="liveActivity">
             <span class="pulse-icon"></span>
-            <span>Live Hardware Listener Active</span>
+            <span id="liveActivityText">Hardware Offline</span>
           </div>
         </div>
 
@@ -252,7 +251,7 @@
             <div class="form-group">
               <label for="stringTextInput">Text to Auto-Type</label>
               <textarea id="stringTextInput" rows="3" placeholder="e.g. git status&#10;or your email address"></textarea>
-              <span class="field-hint">The Pico will type out these exact characters when pressed.</span>
+              <span class="field-hint">Auto-types standard ASCII characters (letters, numbers, symbols, spaces, and enter) using US keyboard layout.</span>
             </div>
           </div>
         </div>

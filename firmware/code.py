@@ -359,7 +359,10 @@ def execute_action(action_def):
         elif act_type == "string":
             text = action_def.get("text", "")
             if layout and text:
-                layout.write(text)
+                # KeyboardLayoutUS only maps standard ASCII characters (32..126, \n, \t)
+                ascii_text = "".join(c for c in text if (32 <= ord(c) <= 126) or c in ("\n", "\t"))
+                if ascii_text:
+                    layout.write(ascii_text)
 
     except Exception as e:
         print("Error executing key action:", e)
@@ -373,57 +376,75 @@ def send_serial_msg(data):
         except Exception:
             pass
 
+# Non-blocking USB CDC receive buffer
+serial_rx_buffer = ""
+
 def check_serial_commands():
-    """Checks for incoming commands from the Web Configurator."""
-    global config
+    """Non-blocking check for incoming commands from the Web Configurator."""
+    global config, serial_rx_buffer
     if not serial or not serial.in_waiting:
         return
 
     try:
-        raw_line = serial.readline().decode("utf-8").strip()
-        if not raw_line:
+        # Read only available bytes without blocking
+        chunk = serial.read(serial.in_waiting)
+        if chunk:
+            serial_rx_buffer += chunk.decode("utf-8", "ignore")
+            # Safety limit against buffer bloat if garbage data arrives
+            if len(serial_rx_buffer) > 4096:
+                serial_rx_buffer = ""
+
+        if "\n" not in serial_rx_buffer:
             return
 
-        cmd = json.loads(raw_line)
-        action = cmd.get("action")
+        lines = serial_rx_buffer.split("\n")
+        serial_rx_buffer = lines.pop()  # Retain trailing partial command
 
-        if action == "PING":
-            send_serial_msg({
-                "response": "PONG",
-                "device": "Raspberry Pi Pico MacroPad",
-                "current_mode": current_mode,
-                "button_count": len(buttons)
-            })
+        for raw_line in lines:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
 
-        elif action == "GET_CONFIG":
-            send_serial_msg({
-                "response": "CONFIG",
-                "config": config,
-                "current_mode": current_mode
-            })
+            cmd = json.loads(raw_line)
+            action = cmd.get("action")
 
-        elif action == "SET_CONFIG":
-            new_cfg = cmd.get("config")
-            if validate_config(new_cfg):
-                config = new_cfg
-                saved = save_persistent_config(config)
+            if action == "PING":
                 send_serial_msg({
-                    "response": "CONFIG_SAVED",
-                    "status": "ok",
-                    "persistent": saved
+                    "response": "PONG",
+                    "device": "Raspberry Pi Pico MacroPad",
+                    "current_mode": current_mode,
+                    "button_count": len(buttons)
                 })
-                # Visual confirmation flash
-                for _ in range(3):
-                    for led in green_leds + blue_leds + red_leds: led.value = True
-                    time.sleep(0.06)
-                    for led in green_leds + blue_leds + red_leds: led.value = False
-                    time.sleep(0.06)
-                set_leds_for_mode(current_mode)
-            else:
+
+            elif action == "GET_CONFIG":
                 send_serial_msg({
-                    "response": "ERROR",
-                    "message": "Invalid configuration structure or unsupported keycode"
+                    "response": "CONFIG",
+                    "config": config,
+                    "current_mode": current_mode
                 })
+
+            elif action == "SET_CONFIG":
+                new_cfg = cmd.get("config")
+                if validate_config(new_cfg):
+                    config = new_cfg
+                    saved = save_persistent_config(config)
+                    send_serial_msg({
+                        "response": "CONFIG_SAVED",
+                        "status": "ok",
+                        "persistent": saved
+                    })
+                    # Visual confirmation flash
+                    for _ in range(3):
+                        for led in green_leds + blue_leds + red_leds: led.value = True
+                        time.sleep(0.06)
+                        for led in green_leds + blue_leds + red_leds: led.value = False
+                        time.sleep(0.06)
+                    set_leds_for_mode(current_mode)
+                else:
+                    send_serial_msg({
+                        "response": "ERROR",
+                        "message": "Invalid configuration structure or unsupported keycode"
+                    })
 
     except Exception as err:
         send_serial_msg({"response": "ERROR", "message": str(err)})
