@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pico MacroPad Configurator</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="theme-mode-1">
+  <div class="app-container">
+    <!-- TOP HEADER / NAVBAR -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="4" width="20" height="16" rx="3"></rect>
+            <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>Pico MacroPad</h1>
+          <span class="badge">RP2040 Web Configurator</span>
+        </div>
+      </div>
+
+      <div class="nav-controls">
+        <div class="connection-status" id="connectionStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Disconnected</span>
+        </div>
+        <button id="btnConnect" class="btn btn-primary">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+          <span id="btnConnectText">Connect Device</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN DASHBOARD -->
+    <main class="dashboard-grid">
+      <!-- LEFT / TOP: HARDWARE STATUS & ROTARY SELECTOR -->
+      <section class="card hardware-panel">
+        <div class="card-header">
+          <div class="card-title-wrap">
+            <h2>Hardware Modes</h2>
+            <p>Syncs with the 3-position rotary selector switch</p>
+          </div>
+          <div class="mode-leds-indicator">
+            <span class="led-dot led-green" id="ledGreen" title="Mode 1 LEDs (GP14/15)"></span>
+            <span class="led-dot led-blue" id="ledBlue" title="Mode 2 LEDs (GP16/17)"></span>
+            <span class="led-dot led-red" id="ledRed" title="Mode 3 LEDs (GP18/19)"></span>
+          </div>
+        </div>
+
+        <div class="mode-selector-tabs">
+          <button class="mode-tab active" data-mode="1" id="tabMode1">
+            <div class="tab-badge green">Mode 1</div>
+            <div class="tab-info">
+              <span class="tab-title">Dev & Code</span>
+              <span class="tab-sub">Green LEDs (GP14, GP15)</span>
+            </div>
+          </button>
+
+          <button class="mode-tab" data-mode="2" id="tabMode2">
+            <div class="tab-badge blue">Mode 2</div>
+            <div class="tab-info">
+              <span class="tab-title">Media & Audio</span>
+              <span class="tab-sub">Blue LEDs (GP16, GP17)</span>
+            </div>
+          </button>
+
+          <button class="mode-tab" data-mode="3" id="tabMode3">
+            <div class="tab-badge red">Mode 3</div>
+            <div class="tab-info">
+              <span class="tab-title">Quick Tools</span>
+              <span class="tab-sub">Red LEDs (GP18, GP19)</span>
+            </div>
+          </button>
+        </div>
+
+        <div class="actions-bar">
+          <button id="btnSaveToPico" class="btn btn-accent" disabled>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Save to Pico (USB)
+          </button>
+
+          <button id="btnLoadFromPico" class="btn btn-secondary" disabled>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Read from Device
+          </button>
+
+          <div class="preset-dropdown-wrap">
+            <button id="btnPresets" class="btn btn-secondary">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+              </svg>
+              Presets
+            </button>
+            <div class="preset-menu hidden" id="presetMenu">
+              <div class="preset-item" data-preset="coding">Coding & Git (Copy, Paste, Undo, Diff)</div>
+              <div class="preset-item" data-preset="media">Media & Meetings (Mute, Vol+, Vol-, Play)</div>
+              <div class="preset-item" data-preset="streaming">Stream & Windows (Screenshot, App Switch, Run, Lock)</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CENTER: INTERACTIVE KEYBOARD LAYOUT -->
+      <section class="card keymap-panel">
+        <div class="card-header">
+          <div>
+            <h2 id="currentModeDisplayTitle">Mode 1: Dev & Code</h2>
+            <p>Click any button below to customize its action</p>
+          </div>
+          <div class="live-activity-badge" id="liveActivity">
+            <span class="pulse-icon"></span>
+            <span>Live Hardware Listener Active</span>
+          </div>
+        </div>
+
+        <div class="pad-chassis">
+          <div class="chassis-screws">
+            <span class="screw top-left"></span>
+            <span class="screw top-right"></span>
+            <span class="screw bottom-left"></span>
+            <span class="screw bottom-right"></span>
+          </div>
+
+          <div class="keys-grid" id="keysGrid">
+            <!-- Buttons dynamically generated via JS -->
+          </div>
+        </div>
+
+        <div class="live-test-area">
+          <label for="testInput">Keyboard Live Test Area:</label>
+          <input type="text" id="testInput" placeholder="Click here and press buttons on your Pico breadboard to test..." />
+          <p class="helper-text">Shortcuts like Copy/Paste will act inside this box when focused.</p>
+        </div>
+      </section>
+
+      <!-- LOG & HARDWARE MONITOR -->
+      <section class="card serial-log-panel">
+        <div class="card-header">
+          <div>
+            <h2>Hardware Telemetry</h2>
+            <p>USB CDC Serial event stream</p>
+          </div>
+          <button id="btnClearLog" class="btn-text">Clear</button>
+        </div>
+        <div class="log-stream" id="logStream">
+          <div class="log-entry system">[SYSTEM] Web Configurator initialized. Waiting for USB connection...</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- KEY ACTION EDITOR MODAL -->
+    <div class="modal-overlay hidden" id="editModal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3 id="modalKeyTitle">Edit Button 1</h3>
+            <p id="modalKeySubtitle">Select what happens when this key is pressed</p>
+          </div>
+          <button class="modal-close-btn" id="modalCloseBtn">&times;</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="keyLabelInput">Keycap Display Label</label>
+            <input type="text" id="keyLabelInput" placeholder="e.g. Copy, Mute, Git Status" maxlength="16" />
+          </div>
+
+          <div class="action-type-tabs">
+            <button class="action-type-btn active" data-type="combo">Hotkey / Combo</button>
+            <button class="action-type-btn" data-type="single">Single Key</button>
+            <button class="action-type-btn" data-type="media">Media Control</button>
+            <button class="action-type-btn" data-type="string">Text Snippet</button>
+          </div>
+
+          <!-- PANE: COMBO -->
+          <div class="action-pane" id="paneCombo">
+            <label>Modifier Keys (Select any combination)</label>
+            <div class="modifier-checkboxes">
+              <label class="mod-pill"><input type="checkbox" value="CTRL" id="modCtrl" /> <span>Ctrl</span></label>
+              <label class="mod-pill"><input type="checkbox" value="SHIFT" id="modShift" /> <span>Shift</span></label>
+              <label class="mod-pill"><input type="checkbox" value="ALT" id="modAlt" /> <span>Alt / Option</span></label>
+              <label class="mod-pill"><input type="checkbox" value="GUI" id="modGui" /> <span>Win / Cmd</span></label>
+            </div>
+
+            <div class="form-group">
+              <label for="comboKeySelect">Key to Press with Modifiers</label>
+              <select id="comboKeySelect" class="styled-select">
+                <!-- Dynamically populated -->
+              </select>
+            </div>
+            <div class="combo-preview-box">
+              <span>Resulting Shortcut:</span>
+              <span class="preview-tag" id="comboPreviewText">Ctrl + C</span>
+            </div>
+          </div>
+
+          <!-- PANE: SINGLE KEY -->
+          <div class="action-pane hidden" id="paneSingle">
+            <div class="form-group">
+              <label for="singleKeySelect">Select Key</label>
+              <select id="singleKeySelect" class="styled-select">
+                <!-- Dynamically populated -->
+              </select>
+            </div>
+          </div>
+
+          <!-- PANE: MEDIA -->
+          <div class="action-pane hidden" id="paneMedia">
+            <label>Consumer Audio & Media Function</label>
+            <div class="media-grid">
+              <button class="media-option" data-media="MUTE">
+                <span class="media-name">Mute / Unmute</span>
+              </button>
+              <button class="media-option" data-media="VOLUME_UP">
+                <span class="media-name">Volume Up</span>
+              </button>
+              <button class="media-option" data-media="VOLUME_DOWN">
+                <span class="media-name">Volume Down</span>
+              </button>
+              <button class="media-option" data-media="PLAY_PAUSE">
+                <span class="media-name">Play / Pause</span>
+              </button>
+              <button class="media-option" data-media="NEXT_TRACK">
+                <span class="media-name">Next Track</span>
+              </button>
+              <button class="media-option" data-media="PREV_TRACK">
+                <span class="media-name">Previous Track</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- PANE: STRING -->
+          <div class="action-pane hidden" id="paneString">
+            <div class="form-group">
+              <label for="stringTextInput">Text to Auto-Type</label>
+              <textarea id="stringTextInput" rows="3" placeholder="e.g. git status&#10;or your email address"></textarea>
+              <span class="field-hint">The Pico will type out these exact characters when pressed.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="modalCancelBtn">Cancel</button>
+          <button class="btn btn-accent" id="modalApplyBtn">Apply Action</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
